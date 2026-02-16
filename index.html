@@ -6,16 +6,39 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     body { font-family: system-ui, sans-serif; margin: 20px; }
-    button { margin-right: 8px; }
+    button { margin-right: 8px; margin-bottom: 10px; }
+    .muted { color: #666; font-size: 12px; }
     pre { background: #f6f8fa; padding: 12px; border-radius: 8px; overflow: auto; }
+
+    .table-wrap { margin-top: 14px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 10px; }
+    table { border-collapse: collapse; width: 100%; min-width: 900px; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { position: sticky; top: 0; background: #fff; z-index: 1; border-bottom: 1px solid #ddd; }
+    tr:hover td { background: #fafafa; }
+
+    .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .toolbar input { padding: 6px 8px; border: 1px solid #ddd; border-radius: 8px; min-width: 260px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f3f4f6; font-size: 12px; }
   </style>
 </head>
 <body>
   <h2>MASTER Viewer (GitHub Pages)</h2>
 
-  <button id="btnSignIn">Sign in</button>
-  <button id="btnLoad" disabled>Load latest 1000</button>
-  <button id="btnLoadAll" disabled>Load ALL (paged)</button>
+  <div class="toolbar">
+    <button id="btnSignIn">Sign in</button>
+
+    <button id="btnShowLatest" disabled>Show table (latest 1000)</button>
+    <button id="btnShowAll" disabled>Show table (ALL paged)</button>
+
+    <input id="q" disabled placeholder="Filter (contains)…" />
+    <span id="meta" class="pill">Not signed in</span>
+  </div>
+
+  <div class="muted">
+    Tip: ถ้าข้อมูลเยอะมาก แนะนำใช้ latest/paged + filter แทนการโหลดทั้งหมดในครั้งเดียว
+  </div>
+
+  <div id="tableContainer" class="table-wrap" style="display:none;"></div>
 
   <pre id="out">Not signed in.</pre>
 
@@ -26,8 +49,16 @@ const SCRIPT_ID  = "1RjqH74IuRM6arv_N10xKEbKXIgAbp3HwOp2B-kbyqmgYX8xE7FllNP28";
 let accessToken = null;
 let tokenClient = null;
 
+// cache ล่าสุดที่โหลด เพื่อ filter ได้ทันทีโดยไม่ต้องยิง API ซ้ำ
+let lastLoadedRows = [];
+let lastLoadedHeaders = [];
+
 function log(obj) {
   document.getElementById("out").textContent = JSON.stringify(obj, null, 2);
+}
+
+function setMeta(text) {
+  document.getElementById("meta").textContent = text;
 }
 
 async function callScriptsRun(functionName, paramsObj) {
@@ -50,12 +81,98 @@ async function callScriptsRun(functionName, paramsObj) {
   return json.response.result;
 }
 
-async function loadLatest() {
+function normalizeCell(v) {
+  // Apps Script Date มักถูก serialize เป็น string; บางกรณีอาจเป็น object
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  // fallback
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+function buildHeadersFromRows(rows) {
+  if (!rows || rows.length === 0) return [];
+  // apiGet() คืนเป็น array ของ object (key=header)
+  return Object.keys(rows[0]);
+}
+
+function renderTable(rows) {
+  const container = document.getElementById("tableContainer");
+  if (!rows || rows.length === 0) {
+    container.style.display = "block";
+    container.innerHTML = `<div style="padding:12px;">No data</div>`;
+    return;
+  }
+
+  const headers = buildHeadersFromRows(rows);
+  lastLoadedRows = rows;
+  lastLoadedHeaders = headers;
+
+  const thead = `
+    <thead>
+      <tr>
+        ${headers.map(h => `<th>${escapeHtml(h)}</th>`).join("")}
+      </tr>
+    </thead>
+  `;
+
+  const tbody = `
+    <tbody>
+      ${rows.map(r => `
+        <tr>
+          ${headers.map(h => `<td>${escapeHtml(normalizeCell(r[h]))}</td>`).join("")}
+        </tr>
+      `).join("")}
+    </tbody>
+  `;
+
+  container.innerHTML = `<table>${thead}${tbody}</table>`;
+  container.style.display = "block";
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function applyFilter() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  if (!q) {
+    renderTable(lastLoadedRows);
+    setMeta(`rows: ${lastLoadedRows.length} (no filter)`);
+    return;
+  }
+
+  const filtered = lastLoadedRows.filter(row => {
+    // simple contains search across all cells
+    for (const h of lastLoadedHeaders) {
+      const v = normalizeCell(row[h]).toLowerCase();
+      if (v.includes(q)) return true;
+    }
+    return false;
+  });
+
+  renderTable(filtered);
+  setMeta(`rows: ${filtered.length} / ${lastLoadedRows.length} (filtered)`);
+}
+
+async function showLatestTable() {
+  setMeta("Loading latest…");
   const result = await callScriptsRun("apiGet", { limit: 1000, offset: 0, order: "desc" });
+
+  // result = { ok, meta, data: [...] }
+  renderTable(result.data || []);
+  document.getElementById("q").disabled = false;
+  setMeta(`rows: ${(result.data || []).length} / total: ${result.meta?.total ?? "?"}`);
   log(result);
 }
 
-async function loadAllPaged() {
+async function showAllPagedTable() {
+  setMeta("Loading ALL paged…");
   const pageSize = 5000;
   let offset = 0;
   let all = [];
@@ -64,17 +181,22 @@ async function loadAllPaged() {
   while (true) {
     const r = await callScriptsRun("apiGet", { limit: pageSize, offset, order: "desc" });
     meta = r.meta;
-    all = all.concat(r.data);
 
-    if (!r.data || r.data.length === 0) break;
-    offset += r.data.length;
+    const chunk = r.data || [];
+    all = all.concat(chunk);
+
+    if (chunk.length === 0) break;
+    offset += chunk.length;
     if (meta && offset >= meta.total) break;
 
-    // กันไม่ให้ค้างในกรณี meta.total ไม่ถูก (safety)
+    // safety guard
     if (offset > 500000) break;
   }
 
-  log({ ok: true, meta, totalLoaded: all.length, data: all });
+  renderTable(all);
+  document.getElementById("q").disabled = false;
+  setMeta(`rows: ${all.length} / total: ${meta?.total ?? "?"}`);
+  log({ ok: true, meta, totalLoaded: all.length });
 }
 
 window.onload = () => {
@@ -88,8 +210,12 @@ window.onload = () => {
     callback: (resp) => {
       if (resp.error) return log(resp);
       accessToken = resp.access_token;
-      document.getElementById("btnLoad").disabled = false;
-      document.getElementById("btnLoadAll").disabled = false;
+
+      document.getElementById("btnShowLatest").disabled = false;
+      document.getElementById("btnShowAll").disabled = false;
+      document.getElementById("q").disabled = false;
+
+      setMeta("Signed in");
       log({ ok: true, signedIn: true });
     }
   });
@@ -98,15 +224,21 @@ window.onload = () => {
     tokenClient.requestAccessToken({ prompt: "" });
   };
 
-  document.getElementById("btnLoad").onclick = async () => {
-    try { await loadLatest(); }
-    catch (e) { log({ ok: false, error: String(e) }); }
+  document.getElementById("btnShowLatest").onclick = async () => {
+    try { await showLatestTable(); }
+    catch (e) { log({ ok: false, error: String(e) }); setMeta("Error"); }
   };
 
-  document.getElementById("btnLoadAll").onclick = async () => {
-    try { await loadAllPaged(); }
-    catch (e) { log({ ok: false, error: String(e) }); }
+  document.getElementById("btnShowAll").onclick = async () => {
+    try { await showAllPagedTable(); }
+    catch (e) { log({ ok: false, error: String(e) }); setMeta("Error"); }
   };
+
+  document.getElementById("q").addEventListener("input", () => {
+    // ถ้ายังไม่ได้โหลดข้อมูล จะไม่ทำอะไร
+    if (!lastLoadedRows || lastLoadedRows.length === 0) return;
+    applyFilter();
+  });
 };
 </script>
 </body>
