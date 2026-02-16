@@ -66,7 +66,7 @@ async function callScriptsRun(functionName, paramsObj) {
     function: functionName,
     parameters: [paramsObj]
   };
-  const res = await fetch(`https://script.googleapis.com/v1/scripts/${SCRIPT_ID}:run`, {
+  const res = await fetch(`https://script.googleapis.com/v1/scripts/${SCRIPT_ID}.run`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${accessToken}`,
