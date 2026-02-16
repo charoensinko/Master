@@ -66,7 +66,6 @@ async function callScriptsRun(functionName, paramsObj) {
     function: functionName,
     parameters: [paramsObj]
   };
-
   const res = await fetch(`https://script.googleapis.com/v1/scripts/${SCRIPT_ID}:run`, {
     method: "POST",
     headers: {
@@ -75,7 +74,7 @@ async function callScriptsRun(functionName, paramsObj) {
     },
     body: JSON.stringify(payload)
   });
-
+  
   const json = await res.json();
   if (json.error) throw new Error(JSON.stringify(json.error, null, 2));
   return json.response.result;
